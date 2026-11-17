@@ -15,9 +15,10 @@ const auditSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    const { code, blueprint } = (await req.json()) as {
+    const { code, blueprint, styleId } = (await req.json()) as {
       code: string;
       blueprint?: PageBlueprint;
+      styleId?: string;
     };
 
     if (!code || typeof code !== "string") {
@@ -27,16 +28,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 1. Run rigorous static tests (Babel AST, CDN compliance, Root component, Tailwind)
-    const staticResult = runStaticTests(code);
+    // 1. Jalankan pengujian statis & aturan desain terpadu dari designRules.ts
+    const staticResult = runStaticTests(code, blueprint, styleId);
     const tests: TestCaseResult[] = [...staticResult.tests];
 
-    // If static tests failed (e.g. syntax error or missing App), preview is blocked!
+    // Jika pengujian statis / aturan desain gagal (severity error atau syntax error), preview DIBLOKIR!
     if (!staticResult.passed) {
+      const errorCount = staticResult.violations.filter((v) => v.severity === "error").length;
       const report: VerificationReport = {
         passed: false,
-        score: 40,
-        summary: "Kode belum lolos pengujian sintaks atau aturan sandbox. Perbaikan diperlukan sebelum preview.",
+        score: Math.max(30, 70 - errorCount * 15),
+        summary: `Kode belum lolos pengujian aturan desain ("${staticResult.style.name}") atau sintaks Babel. Perbaikan diperlukan sebelum membuka preview.`,
         tests,
         canPreview: false,
         sanitizedCode: staticResult.sanitizedCode,
@@ -45,25 +47,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, report });
     }
 
-    // 2. Run AI Code Auditor & Quality Inspector
+    // 2. Jalankan AI Code Auditor (google/gemma-4-31b-it:free) untuk audit kualitas konten
     let aiScore = 95;
-    let aiSummary = "Semua pengujian lolos. Komponen siap ditampilkan di Live Preview.";
+    let aiSummary = `Semua pengujian lolos sesuai panduan gaya "${staticResult.style.name}". Komponen siap ditampilkan di Live Preview.`;
     let aiIssues: string[] = [];
 
     const sectionsList = blueprint?.sections?.map((s) => s.name).join(", ") || "Hero, Features, Content";
 
     const prompt = `Review this React component code generated for a website blueprint.
 Blueprint Title: ${blueprint?.title || "Website"}
-Target Audience: ${blueprint?.targetAudience || "General"}
+Design Style Direction: ${staticResult.style.name} (${staticResult.style.typography})
 Required Sections: ${sectionsList}
 
 Code snippet to inspect:
 ${code.slice(0, 3500)}
 
 Audit the code for:
-1. Blueprint coverage: Are the planned sections implemented?
+1. Blueprint coverage: Are the planned sections implemented in order?
 2. Defensive code: Are default values, safe mappings, and event handlers clean?
-3. Polish & Readability: Is the component ready for production preview?`;
+3. Polish & Readability: Does it follow the ${staticResult.style.name} design system without forbidden decorations?`;
 
     for (const modelId of CANDIDATE_TESTER_MODELS) {
       try {
@@ -87,7 +89,7 @@ Audit the code for:
           details:
             aiIssues.length > 0
               ? `Catatan QA: ${aiIssues.join("; ")}`
-              : "Kode memiliki struktur rapi dan mencakup seksi yang direncanakan.",
+              : `Kode memiliki struktur rapi dan mencakup seksi yang direncanakan dengan gaya ${staticResult.style.name}.`,
         });
         break;
       } catch (err) {
@@ -95,15 +97,15 @@ Audit the code for:
       }
     }
 
-    // If no tester model succeeded, provide local verified pass
+    // Fallback pass lokal jika model reviewer kehabisan quota/rate-limited
     if (!tests.some((t) => t.id === "ai-audit")) {
       tests.push({
         id: "ai-audit",
         name: "AI Code Quality & Blueprint Alignment",
         category: "ai_audit",
         status: "passed",
-        message: "Verifikasi statis dan struktur komponen berhasil diverifikasi.",
-        details: "Pengujian sintaks dan dependensi 100% valid.",
+        message: `Verifikasi statis dan struktur komponen berhasil diverifikasi sesuai gaya "${staticResult.style.name}".`,
+        details: "Pengujian sintaks dan aturan desain 100% valid.",
       });
     }
 

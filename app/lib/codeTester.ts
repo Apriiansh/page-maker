@@ -1,10 +1,24 @@
 import * as babelParser from "@babel/parser";
 import { TestCaseResult } from "@/app/types";
+import {
+  checkDesignRules,
+  formatViolationsForRetry,
+  getStyleById,
+  pickStyle,
+  StyleDirection,
+  Violation,
+  Blueprint,
+  TECHNICAL_RULES,
+  DESIGN_BANS,
+  OUTPUT_RULES,
+} from "./designRules";
 
 export interface SanitizeResult {
   cleanedCode: string;
   lucideIcons: string[];
 }
+
+export { checkDesignRules, formatViolationsForRetry };
 
 /**
  * Membersihkan kode dari AI agar kompatibel dengan Babel Standalone + React UMD (CDN).
@@ -25,7 +39,8 @@ export function sanitizeCode(raw: string): SanitizeResult {
 
   // 2. Ekstrak icon lucide-react jika ada import
   const lucideIcons: string[] = [];
-  const lucideImportRegex = /import\s+\{([\s\S]*?)\}\s+from\s+['"]lucide-react['"];?/g;
+  const lucideImportRegex =
+    /import\s+\{([\s\S]*?)\}\s+from\s+['"]lucide-react['"];?/g;
   let match;
   while ((match = lucideImportRegex.exec(code)) !== null) {
     if (match[1]) {
@@ -60,28 +75,92 @@ export function sanitizeCode(raw: string): SanitizeResult {
 }
 
 /**
- * Menjalankan static tests:
- * 1. AST Syntax Test (@babel/parser)
- * 2. Artifact & CDN Dependency Rules
- * 3. Component Architecture (App root function)
- * 4. React Scope & Hooks Hygiene
- * 5. Responsive Tailwind Layout
+ * Helper untuk memberikan label nama tes yang rapi dan mudah dipahami
  */
-export function runStaticTests(rawCode: string): {
+function getRuleDisplayName(ruleId: string): string {
+  const map: Record<string, string> = {
+    "react-global": "React 18 Global Setup",
+    "no-import-export": "No Import/Export Statements",
+    "no-self-mount": "Host-Mount Isolation",
+    "plain-js": "Plain JavaScript & JSX Syntax",
+    "tailwind-only": "Tailwind Utility Styling",
+    "inline-svg-icons": "Inline SVG Icon Standard",
+    "defensive": "Defensive Runtime Safety",
+    "responsive": "Responsive Breakpoints (md/lg)",
+    "load-fonts": "Dynamic Google Fonts Loader",
+    "no-gradient": "Zero-Gradient Aesthetics",
+    "no-glass-glow-blobs": "Clean Surface (No Glow/Blur)",
+    "no-eyebrow": "No Pill/Eyebrow Badge Clutter",
+    "no-emoji": "Zero Emoji/Pictograph Rule",
+    "no-generic-headings": "Contextual Headings",
+    "varied-layout": "Varied Section Layouts",
+    "no-fake-proof": "Authentic Content (No Fake Proof)",
+    "one-decoration": "Restrained Decoration",
+    "minimal-footer": "Minimalist Footer",
+    "code-only": "Clean Output (No Fences)",
+    "component-name": "App Component Declaration",
+    "style-palette": "Design System Palette Match",
+    "style-radius": "Design System Corner Radius",
+  };
+  return map[ruleId] || ruleId.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
+ * Menentukan kategori pengujian untuk UI
+ */
+function getRuleCategory(
+  ruleId: string
+): "syntax" | "compliance" | "architecture" | "ai_audit" {
+  if (
+    ruleId.includes("syntax") ||
+    ruleId === "plain-js" ||
+    ruleId === "no-import-export" ||
+    ruleId === "react-global"
+  ) {
+    return "syntax";
+  }
+  if (
+    ruleId === "component-name" ||
+    ruleId === "no-self-mount" ||
+    ruleId === "defensive"
+  ) {
+    return "architecture";
+  }
+  return "compliance";
+}
+
+/**
+ * Menjalankan static tests secara terpadu berdasarkan aturan dari designRules.ts:
+ * 1. AST Syntax Compilation Test (@babel/parser)
+ * 2. Design Rules & Constraints Check (checkDesignRules)
+ * 3. Style Conformance (Palet warna & Corner radius sesuai tema)
+ */
+export function runStaticTests(
+  rawCode: string,
+  blueprint?: Blueprint,
+  styleId?: string
+): {
   tests: TestCaseResult[];
   passed: boolean;
   sanitizedCode: string;
+  violations: Violation[];
+  style: StyleDirection;
 } {
   const tests: TestCaseResult[] = [];
-  const { cleanedCode, lucideIcons } = sanitizeCode(rawCode);
+  const { cleanedCode } = sanitizeCode(rawCode);
 
-  // Helper kode yang siap dieksekusi di browser
+  // Tentukan arah gaya (StyleDirection) sesuai blueprint atau styleId
+  const style =
+    getStyleById(styleId) ||
+    pickStyle(blueprint || {});
+
+  // Helper kode untuk simulasi eksekusi runtime
   const codeToParse = `
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 ${cleanedCode}
 `;
 
-  // --- Test 1: JSX & AST Syntax Compilation ---
+  // --- 1. AST Syntax Test (@babel/parser) ---
   let syntaxPassed = true;
   try {
     babelParser.parse(codeToParse, {
@@ -102,7 +181,10 @@ ${cleanedCode}
     let col: number | undefined;
 
     if (err && typeof err === "object") {
-      const bErr = err as { message?: string; loc?: { line: number; column: number } };
+      const bErr = err as {
+        message?: string;
+        loc?: { line: number; column: number };
+      };
       errorMsg = bErr.message || errorMsg;
       if (bErr.loc) {
         line = bErr.loc.line;
@@ -122,118 +204,66 @@ ${cleanedCode}
     });
   }
 
-  // --- Test 2: Artifact & CDN Dependency Rules ---
-  const unhandledImportMatch = cleanedCode.match(/\bimport\s+.*?\s+from\b/);
-  const unhandledRequireMatch = cleanedCode.match(/\brequire\s*\(/);
-  const styleJsxMatch = cleanedCode.match(/<style\s+jsx/);
+  // --- 2. Design & Technical Rules Check dari designRules.ts ---
+  const violations = checkDesignRules(cleanedCode, style);
+  const violatedRuleIds = new Set(violations.map((v) => v.ruleId));
 
-  if (unhandledImportMatch || unhandledRequireMatch) {
+  // Masukkan pelanggaran yang terdeteksi ke dalam daftar tes
+  for (const v of violations) {
     tests.push({
-      id: "cdn-compliance",
-      name: "Artifact & CDN Dependency Compliance",
-      category: "compliance",
-      status: "failed",
-      message: "Terdeteksi import/require eksternal npm yang tidak didukung oleh sandbox CDN.",
-      details: "Hanya React, ReactDOM, Tailwind CSS, dan Lucide React yang diizinkan melalui CDN.",
-    });
-  } else if (styleJsxMatch) {
-    tests.push({
-      id: "cdn-compliance",
-      name: "Artifact & CDN Dependency Compliance",
-      category: "compliance",
-      status: "failed",
-      message: "Tag <style jsx> terdeteksi. Sandbox hanya mendukung utility classes Tailwind CSS.",
-      details: "Ganti inline <style jsx> dengan Tailwind class.",
-    });
-  } else {
-    tests.push({
-      id: "cdn-compliance",
-      name: "Artifact & CDN Dependency Compliance",
-      category: "compliance",
-      status: "passed",
-      message: "Semua dependensi mematuhi aturan Artifact sandbox (Tailwind, React, Lucide UMD).",
-      details: lucideIcons.length > 0 ? `Ikon yang dideteksi: ${lucideIcons.join(", ")}` : undefined,
+      id: v.ruleId,
+      name: getRuleDisplayName(v.ruleId),
+      category: getRuleCategory(v.ruleId),
+      status: v.severity === "error" ? "failed" : "warning",
+      message: v.message,
+      details: `Aturan desain: ${style.name} (${v.severity.toUpperCase()})`,
     });
   }
 
-  // --- Test 3: Component Architecture (App root function) ---
-  const hasAppFunction =
-    /\bfunction\s+(?:App|Portfolio|LandingPage)\b/.test(cleanedCode) ||
-    /\bconst\s+(?:App|Portfolio|LandingPage)\s*=\s*(?:\([^)]*\)|[a-zA-Z0-9_]+)\s*=>/.test(cleanedCode);
+  // Tambahkan ringkasan aturan utama yang lolos (Clean Pass)
+  const coreRules = [...TECHNICAL_RULES, ...DESIGN_BANS, ...OUTPUT_RULES];
+  for (const r of coreRules) {
+    if (!violatedRuleIds.has(r.id)) {
+      tests.push({
+        id: r.id,
+        name: getRuleDisplayName(r.id),
+        category: getRuleCategory(r.id),
+        status: "passed",
+        message: `Mematuhi aturan ${getRuleDisplayName(r.id)} sesuai panduan desain.`,
+      });
+    }
+  }
 
-  if (hasAppFunction) {
+  // Style Conformance: palet & radius jika tidak ada pelanggaran
+  if (!violatedRuleIds.has("style-palette")) {
     tests.push({
-      id: "component-root",
-      name: "Component Architecture",
-      category: "architecture",
+      id: "style-palette",
+      name: "Design System Palette Match",
+      category: "compliance",
       status: "passed",
-      message: "Komponen utama (App) ditemukan dan siap di-mount ke root DOM.",
-    });
-  } else {
-    tests.push({
-      id: "component-root",
-      name: "Component Architecture",
-      category: "architecture",
-      status: "failed",
-      message: "Komponen utama 'function App() { ... }' tidak ditemukan di dalam kode.",
-      details: "Pastikan komponen utama didefinisikan dengan nama App.",
+      message: `Penggunaan warna selaras dengan palet tema "${style.name}".`,
     });
   }
 
-  // --- Test 4: React Scope & Hooks Hygiene ---
-  const rawHasDuplicateHooks =
-    /(?:const|let|var)\s+\{[\s\S]*?(useState|useEffect)[\s\S]*?\}\s*=\s*React/i.test(rawCode);
-
-  tests.push({
-    id: "hooks-hygiene",
-    name: "React Scope & Hooks Hygiene",
-    category: "syntax",
-    status: "passed",
-    message: "Deklarasi hooks (useState, useEffect, dll.) terisolasi dengan aman dari scope global.",
-    details: rawHasDuplicateHooks
-      ? "Auto-sanitizer telah membersihkan deklarasi duplikat agar tidak terjadi collision."
-      : undefined,
-  });
-
-  // --- Test 5: Responsive Tailwind Layout ---
-  const hasTailwindClasses =
-    /\bclassName="[^"]*?(?:flex|grid|hidden|p-|m-|text-|bg-|w-|h-)[^"]*?"/.test(cleanedCode);
-  const hasResponsiveBreakpoints =
-    /\b(?:sm:|md:|lg:|xl:)/.test(cleanedCode);
-
-  if (hasTailwindClasses && hasResponsiveBreakpoints) {
+  if (!violatedRuleIds.has("style-radius")) {
     tests.push({
-      id: "responsive-layout",
-      name: "Responsive Layout & Tailwind Classes",
+      id: "style-radius",
+      name: "Design System Corner Radius",
       category: "compliance",
       status: "passed",
-      message: "Layout responsif terverifikasi dengan breakpoint (sm, md, lg) dan utility Tailwind.",
-    });
-  } else if (hasTailwindClasses) {
-    tests.push({
-      id: "responsive-layout",
-      name: "Responsive Layout & Tailwind Classes",
-      category: "compliance",
-      status: "warning",
-      message: "Tailwind utility terdeteksi, namun breakpoint responsif (sm:/md:) minim.",
-    });
-  } else {
-    tests.push({
-      id: "responsive-layout",
-      name: "Responsive Layout & Tailwind Classes",
-      category: "compliance",
-      status: "failed",
-      message: "Tidak ditemukan kelas Tailwind CSS yang valid pada elemen JSX.",
+      message: `Radius sudut elemen mematuhi standar desain "${style.name}".`,
     });
   }
 
-  const allPassed = tests.every(
-    (t) => t.status === "passed" || t.status === "warning"
-  );
+  // Preview hanya boleh dibuka jika TIDAK ADA error (severity = error) dan sintaks Babel lolos
+  const hasErrorViolation = violations.some((v) => v.severity === "error");
+  const overallPassed = syntaxPassed && !hasErrorViolation;
 
   return {
     tests,
-    passed: allPassed && syntaxPassed,
+    passed: overallPassed,
     sanitizedCode: codeToParse,
+    violations,
+    style,
   };
 }

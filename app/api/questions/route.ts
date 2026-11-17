@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
         acknowledgment: "",
         category: "Website Purpose",
         question:
-          "What kind of website would you like to build today? (e.g., a personal portfolio, product landing page, or company profile)",
+          "What kind of website would you like to build today and tell me the name of website? (e.g., a personal portfolio, product landing page, or company profile)",
       });
     }
 

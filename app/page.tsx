@@ -30,10 +30,12 @@ export default function Home() {
 
   // Testing & Quality Gate States
   const [verificationReport, setVerificationReport] = useState<VerificationReport | null>(null);
+  const [currentStyleId, setCurrentStyleId] = useState<string | null>(null);
   const [isVerifying, setIsVerifying] = useState<boolean>(false);
   const [isRepairing, setIsRepairing] = useState<boolean>(false);
+  const [isRevising, setIsRevising] = useState<boolean>(false);
 
-  // Step 1: Start inquiry and fetch the opening question
+  // Step 1: Start inquiry and fetch opening question
   async function handleStart() {
     setLoading(true);
     setErrorMessage(null);
@@ -46,12 +48,12 @@ export default function Home() {
       });
       const data = await res.json();
       if (!data.success) {
-        throw new Error(data.error || "Gagal mengambil pertanyaan pembuka.");
+        throw new Error(data.error || "Failed to fetch opening question.");
       }
 
       setCurrentQuestion(data.question);
       setCurrentAcknowledgment("");
-      setCurrentCategory(data.category || "Tujuan & Visi");
+      setCurrentCategory(data.category || "Purpose & Vision");
       setHistory([]);
       setQuestionNumber(1);
       setStep("questioning");
@@ -59,14 +61,14 @@ export default function Home() {
       const msg =
         err instanceof Error
           ? err.message
-          : "Gagal mengambil pertanyaan pembuka.";
+          : "Failed to fetch opening question.";
       setErrorMessage(msg);
     } finally {
       setLoading(false);
     }
   }
 
-  // Step 2: Submit current explanation and fetch the next adaptive question
+  // Step 2: Submit current explanation and fetch next adaptive question
   async function handleNextQuestion() {
     if (!answerInput.trim() || loading) return;
 
@@ -87,27 +89,27 @@ export default function Home() {
       });
       const data = await res.json();
       if (!data.success) {
-        throw new Error(data.error || "Gagal mengambil pertanyaan selanjutnya.");
+        throw new Error(data.error || "Failed to fetch next question.");
       }
 
       setHistory(updatedHistory);
       setQuestionNumber((prev) => prev + 1);
       setCurrentQuestion(data.question);
       setCurrentAcknowledgment(data.acknowledgment || "");
-      setCurrentCategory(data.category || "Konten & Tata Letak");
+      setCurrentCategory(data.category || "Content & Layout");
       setAnswerInput("");
     } catch (err: unknown) {
       const msg =
         err instanceof Error
           ? err.message
-          : "Gagal mengambil pertanyaan selanjutnya.";
+          : "Failed to fetch next question.";
       setErrorMessage(msg);
     } finally {
       setLoading(false);
     }
   }
 
-  // Step 3: Finish questioning and synthesize the full page blueprint
+  // Step 3: Finish questioning and synthesize full page blueprint
   async function handleSynthesize() {
     if (loading) return;
 
@@ -117,7 +119,7 @@ export default function Home() {
       : history;
 
     if (finalHistory.length === 0) {
-      setErrorMessage("Silakan bagikan gambaran website Anda sebelum melanjutkan.");
+      setErrorMessage("Please share your website vision before proceeding.");
       return;
     }
 
@@ -132,7 +134,7 @@ export default function Home() {
       });
       const data = await res.json();
       if (!data.success) {
-        throw new Error(data.error || "Gagal mensintesis rancangan blueprint.");
+        throw new Error(data.error || "Failed to synthesize blueprint.");
       }
 
       setHistory(finalHistory);
@@ -140,15 +142,19 @@ export default function Home() {
       setStep("blueprint");
     } catch (err: unknown) {
       const msg =
-        err instanceof Error ? err.message : "Terjadi kesalahan yang tidak terduga.";
+        err instanceof Error ? err.message : "An unexpected error occurred.";
       setErrorMessage(msg);
     } finally {
       setLoading(false);
     }
   }
 
-  // Menjalankan verifikasi / pengujian kode melalui API /api/verify
-  async function runVerification(codeToVerify: string, currentBlueprint: PageBlueprint | null) {
+  // Verification & static test runner
+  async function runVerification(
+    codeToVerify: string,
+    currentBlueprint: PageBlueprint | null,
+    styleId?: string | null
+  ) {
     setIsVerifying(true);
     setErrorMessage(null);
 
@@ -159,24 +165,25 @@ export default function Home() {
         body: JSON.stringify({
           code: codeToVerify,
           blueprint: currentBlueprint,
+          styleId: styleId || currentStyleId,
         }),
       });
 
       const data = await res.json();
       if (!data.success) {
-        throw new Error(data.error || "Pengujian verifikasi gagal dijalankan.");
+        throw new Error(data.error || "Verification testing failed.");
       }
 
       setVerificationReport(data.report);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Gagal memverifikasi kode.";
+      const msg = err instanceof Error ? err.message : "Failed to verify code.";
       setErrorMessage(msg);
     } finally {
       setIsVerifying(false);
     }
   }
 
-  // Step 4: Stream React + Tailwind code generator, lalu otomatis alihkan ke Pengujian (Testing)
+  // Step 4: Stream React + Tailwind code generator, then trigger quality tests
   async function handleGenerateCode() {
     if (!blueprint || loading) return;
 
@@ -196,8 +203,11 @@ export default function Home() {
       });
 
       if (!res.ok || !res.body) {
-        throw new Error("Gagal memulai streaming kode.");
+        throw new Error("Failed to start code stream.");
       }
+
+      const returnedStyleId = res.headers.get("X-Style-Id");
+      if (returnedStyleId) setCurrentStyleId(returnedStyleId);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -210,18 +220,21 @@ export default function Home() {
         setGeneratedPage(accumulated);
       }
 
-      // Setelah streaming selesai, arahkan ke tahap testing terlebih dahulu
+      if (!accumulated.trim()) {
+        throw new Error("The AI model did not return any code lines. Please try generating again.");
+      }
+
       setStep("testing");
-      await runVerification(accumulated, blueprint);
+      await runVerification(accumulated, blueprint, returnedStyleId);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Terjadi kesalahan saat men-generate kode.";
+      const msg = err instanceof Error ? err.message : "An error occurred while generating code.";
       setErrorMessage(msg);
     } finally {
       setIsStreaming(false);
     }
   }
 
-  // Menjalankan perbaikan kode otomatis lewat AI (/api/repair)
+  // Auto-repair code using AI coder model
   async function handleAutoRepair() {
     if (!generatedPage || isRepairing) return;
 
@@ -235,35 +248,82 @@ export default function Home() {
         body: JSON.stringify({
           code: generatedPage,
           blueprint,
+          styleId: currentStyleId,
           errors: verificationReport?.tests || [],
         }),
       });
 
       const data = await res.json();
       if (!data.success) {
-        throw new Error(data.error || "Gagal melakukan perbaikan kode otomatis.");
+        throw new Error(data.error || "Auto-repair failed.");
       }
 
       setGeneratedPage(data.repairedCode);
       setVerificationReport(data.report);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Perbaikan otomatis gagal.";
+      const msg = err instanceof Error ? err.message : "Auto-repair failed.";
       setErrorMessage(msg);
     } finally {
       setIsRepairing(false);
     }
   }
 
-  // Membuka Live Preview setelah lolos pengujian
+  // Handle AI component & page revision
+  async function handleReviseRequest(
+    revisionPrompt: string,
+    selectedElement?: { tagName: string; innerText: string; outerHTML: string }
+  ) {
+    if (!generatedPage || isRevising) return;
+
+    setIsRevising(true);
+    setErrorMessage(null);
+
+    try {
+      const res = await fetch("/api/revise", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: generatedPage,
+          blueprint,
+          styleId: currentStyleId,
+          revisionPrompt,
+          selectedElement,
+        }),
+      });
+
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.error || "Failed to apply AI revision.");
+      }
+
+      setGeneratedPage(data.revisedCode);
+      setVerificationReport(data.report);
+
+      if (!data.report.canPreview) {
+        setStep("testing");
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "AI revision failed.";
+      setErrorMessage(msg);
+    } finally {
+      setIsRevising(false);
+    }
+  }
+
+  // Handle manual code edits applied in Code Editor tab
+  async function handleApplyCodeChanges(newCode: string) {
+    setGeneratedPage(newCode);
+    await runVerification(newCode, blueprint, currentStyleId);
+  }
+
   function handleProceedToPreview() {
     if (!verificationReport?.canPreview) {
-      setErrorMessage("Kode belum lolos pengujian. Harap perbaiki kode sebelum membuka preview.");
+      setErrorMessage("Code has not passed all testing criteria. Please resolve failures before opening preview.");
       return;
     }
     setStep("ready");
   }
 
-  // Reset ke awal
   function handleReset() {
     setStep("intro");
     setHistory([]);
@@ -274,6 +334,7 @@ export default function Home() {
     setAnswerInput("");
     setBlueprint(null);
     setGeneratedPage("");
+    setCurrentStyleId(null);
     setVerificationReport(null);
     setErrorMessage(null);
   }
@@ -301,7 +362,7 @@ export default function Home() {
               onClick={handleReset}
               className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-900 transition-colors cursor-pointer font-mono"
             >
-              <RotateCcw className="w-3.5 h-3.5" /> Mulai Ulang
+              <RotateCcw className="w-3.5 h-3.5" /> Start Over
             </button>
           )}
         </header>
@@ -318,10 +379,10 @@ export default function Home() {
           {step === "intro" && (
             <div className="py-8 space-y-6 max-w-2xl">
               <h1 className="text-3xl sm:text-4xl font-serif tracking-tight text-zinc-950 leading-snug">
-                Deskripsikan Visi Website Anda
+                Describe Your Website Vision
               </h1>
               <p className="text-sm sm:text-base text-zinc-600 leading-relaxed">
-                Dialog interaktif adaptif satu pertanyaan per seksi untuk mengeksplorasi tujuan konten, target audiens, dan seksi website sebelum di-generate dan diverifikasi kualitasnya.
+                An adaptive, step-by-step discovery conversation exploring your goals, target audience, and sections before generating and testing a custom React and Tailwind CSS website.
               </p>
 
               <div className="pt-4">
@@ -330,7 +391,7 @@ export default function Home() {
                   disabled={loading}
                   className="px-6 py-3 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition-colors cursor-pointer disabled:opacity-50 font-mono flex items-center gap-2 shadow-xs"
                 >
-                  {loading ? "Menyiapkan..." : "Mulai Percakapan"}
+                  {loading ? "Preparing..." : "Begin Conversation"}
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
@@ -342,7 +403,7 @@ export default function Home() {
             <div className="py-4 sm:py-6">
               {/* Counter & Category */}
               <div className="flex items-center justify-between text-xs text-zinc-500 mb-6 font-mono">
-                <span>Pertanyaan #{questionNumber}</span>
+                <span>Question #{questionNumber}</span>
                 {currentCategory && (
                   <span className="px-2.5 py-0.5 rounded-full bg-zinc-100 text-zinc-700 border border-zinc-200 text-xs font-sans">
                     {currentCategory}
@@ -369,15 +430,15 @@ export default function Home() {
                   onChange={(e) => setAnswerInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   disabled={loading}
-                  placeholder="Jelaskan kebutuhan Anda, proyek/konten apa yang ingin ditampilkan, atau gaya tata letak yang diinginkan..."
+                  placeholder="Explain your goals, projects, services, or desired style in natural language..."
                   rows={5}
                   className="w-full p-4 rounded-lg bg-white border border-zinc-300 focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-colors text-sm leading-relaxed text-zinc-900 resize-none placeholder:text-zinc-400 disabled:opacity-60 shadow-2xs"
                 />
                 <div className="flex justify-between items-center mt-2 text-xs text-zinc-400 font-mono">
-                  <span>Tekan Ctrl+Enter atau Cmd+Enter untuk kirim jawaban</span>
+                  <span>Press Ctrl+Enter or Cmd+Enter to submit answer</span>
                   <span>
                     {answerInput.trim().length > 0
-                      ? `${answerInput.trim().split(/\s+/).length} kata`
+                      ? `${answerInput.trim().split(/\s+/).length} words`
                       : ""}
                   </span>
                 </div>
@@ -392,11 +453,11 @@ export default function Home() {
                       disabled={loading}
                       className="text-xs text-zinc-600 hover:text-zinc-900 transition-colors cursor-pointer disabled:opacity-40 font-mono underline underline-offset-4"
                     >
-                      Selesai & susun blueprint website →
+                      Finish and synthesize blueprint →
                     </button>
                   ) : (
                     <span className="text-xs text-zinc-400">
-                      Tuliskan penjelasan Anda di atas untuk melanjutkan
+                      Share your thoughts above to proceed
                     </span>
                   )}
                 </div>
@@ -406,7 +467,7 @@ export default function Home() {
                   disabled={loading || !answerInput.trim()}
                   className="w-full sm:w-auto px-5 py-2.5 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition-colors cursor-pointer disabled:opacity-40 font-mono flex items-center justify-center gap-1.5 shadow-xs"
                 >
-                  {loading ? "Memproses..." : "Pertanyaan Selanjutnya →"}
+                  {loading ? "Processing..." : "Next Question →"}
                 </button>
               </div>
             </div>
@@ -418,7 +479,7 @@ export default function Home() {
               <div className="pb-4 border-b border-zinc-200">
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-xs font-mono uppercase text-emerald-700 font-semibold">
-                    Blueprint Tersusun
+                    Blueprint Synthesized
                   </span>
                   <span className="text-zinc-300">•</span>
                   <span className="text-xs px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 font-mono">
@@ -434,14 +495,14 @@ export default function Home() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="p-5 rounded-lg bg-zinc-50 border border-zinc-200 shadow-2xs">
                     <div className="flex items-center gap-1.5 text-xs uppercase font-mono text-zinc-500 mb-1.5">
-                      <Users className="w-3.5 h-3.5" /> Target Audiens
+                      <Users className="w-3.5 h-3.5" /> Target Audience
                     </div>
                     <p className="text-zinc-800 text-sm">{blueprint.targetAudience}</p>
                   </div>
 
                   <div className="p-5 rounded-lg bg-zinc-50 border border-zinc-200 shadow-2xs">
                     <div className="flex items-center gap-1.5 text-xs uppercase font-mono text-zinc-500 mb-1.5">
-                      <Sparkles className="w-3.5 h-3.5" /> Gaya Visual & Tema
+                      <Sparkles className="w-3.5 h-3.5" /> Visual Style & Theme
                     </div>
                     <p className="text-zinc-800 text-sm">{blueprint.visualTheme}</p>
                   </div>
@@ -450,7 +511,7 @@ export default function Home() {
                 {/* Planned Sections */}
                 <div className="p-5 rounded-lg bg-zinc-50 border border-zinc-200 shadow-2xs space-y-3">
                   <div className="flex items-center gap-1.5 text-xs uppercase font-mono text-zinc-500 mb-2">
-                    <Layers className="w-3.5 h-3.5" /> Rencana Seksi & Konten
+                    <Layers className="w-3.5 h-3.5" /> Planned Sections & Content
                   </div>
                   <div className="grid grid-cols-1 gap-2.5">
                     {(blueprint.sections || []).map((sec, i) => (
@@ -473,7 +534,7 @@ export default function Home() {
                 {blueprint.keyFeatures && blueprint.keyFeatures.length > 0 && (
                   <div className="p-5 rounded-lg bg-zinc-50 border border-zinc-200 shadow-2xs">
                     <div className="flex items-center gap-1.5 text-xs uppercase font-mono text-zinc-500 mb-2">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Fitur & Sorotan Interaktif
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Interactive UI Highlights
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {blueprint.keyFeatures.map((feat, i) => (
@@ -495,7 +556,7 @@ export default function Home() {
                   disabled={loading}
                   className="px-6 py-3 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition-colors cursor-pointer font-mono flex items-center gap-2 shadow-xs"
                 >
-                  Generate Kode & Jalankan Pengujian
+                  Generate Code & Run Quality Checks
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
@@ -519,7 +580,7 @@ export default function Home() {
                 code={generatedPage}
                 onProceedToPreview={handleProceedToPreview}
                 onAutoRepair={handleAutoRepair}
-                onRetest={() => runVerification(generatedPage, blueprint)}
+                onRetest={() => runVerification(generatedPage, blueprint, currentStyleId)}
               />
             </div>
           )}
@@ -532,6 +593,9 @@ export default function Home() {
                 isStreaming={false}
                 report={verificationReport}
                 onOpenTests={() => setStep("testing")}
+                onApplyCodeChanges={handleApplyCodeChanges}
+                onReviseRequest={handleReviseRequest}
+                isRevising={isRevising}
               />
             </div>
           )}
