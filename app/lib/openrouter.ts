@@ -11,7 +11,25 @@ export const openrouter = createOpenAI({
 
 export const REASONING_MODEL =
   process.env.NEXT_PUBLIC_MODEL_REASONING ||
-  "nvidia/nemotron-3.5-lightning:free";
+  "meta-llama/llama-3.3-70b-instruct:free";
+
+// Rangkaian model untuk tanya jawab discovery (cepat & luwes dalam berdialog):
+export const QUESTION_MODELS = [
+  process.env.NEXT_PUBLIC_MODEL_REASONING,
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "google/gemini-2.0-flash-exp:free",
+  "qwen/qwen-2.5-coder-32b-instruct:free",
+  "nvidia/nemotron-3.5-lightning:free",
+].filter(Boolean) as string[];
+
+// Rangkaian model untuk sintesis blueprint (menghasilkan JSON blueprint terstruktur):
+export const SYNTHESIZE_MODELS = [
+  process.env.NEXT_PUBLIC_MODEL_REASONING,
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "google/gemini-2.0-flash-exp:free",
+  "qwen/qwen-2.5-coder-32b-instruct:free",
+  "nvidia/nemotron-3.5-lightning:free",
+].filter(Boolean) as string[];
 
 // Rangkaian model coding React:
 // 1. cohere/north-mini-code:free -> Respon instan (~3 detik), dioptimasi untuk agentic coding

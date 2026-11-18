@@ -7,6 +7,7 @@ import {
   Layers,
   CheckCircle2,
   Users,
+  Loader2,
 } from "lucide-react";
 import React, { useState } from "react";
 import LiveSandbox from "./components/LiveSandbox";
@@ -34,6 +35,7 @@ export default function Home() {
   const [isVerifying, setIsVerifying] = useState<boolean>(false);
   const [isRepairing, setIsRepairing] = useState<boolean>(false);
   const [isRevising, setIsRevising] = useState<boolean>(false);
+  const [isSynthesizing, setIsSynthesizing] = useState<boolean>(false);
 
   // Step 1: Start inquiry and fetch opening question
   async function handleStart() {
@@ -124,6 +126,7 @@ export default function Home() {
     }
 
     setLoading(true);
+    setIsSynthesizing(true);
     setErrorMessage(null);
 
     try {
@@ -146,6 +149,7 @@ export default function Home() {
       setErrorMessage(msg);
     } finally {
       setLoading(false);
+      setIsSynthesizing(false);
     }
   }
 
@@ -450,10 +454,17 @@ export default function Home() {
                   {history.length >= 1 || answerInput.trim() ? (
                     <button
                       onClick={handleSynthesize}
-                      disabled={loading}
-                      className="text-xs text-zinc-600 hover:text-zinc-900 transition-colors cursor-pointer disabled:opacity-40 font-mono underline underline-offset-4"
+                      disabled={loading || isSynthesizing}
+                      className="inline-flex items-center gap-1.5 text-xs text-zinc-600 hover:text-zinc-900 transition-colors cursor-pointer disabled:opacity-40 font-mono underline underline-offset-4"
                     >
-                      Finish and synthesize blueprint →
+                      {isSynthesizing ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-zinc-700" />
+                          <span>Synthesizing blueprint with AI...</span>
+                        </>
+                      ) : (
+                        "Finish and synthesize blueprint →"
+                      )}
                     </button>
                   ) : (
                     <span className="text-xs text-zinc-400">
@@ -464,10 +475,17 @@ export default function Home() {
 
                 <button
                   onClick={handleNextQuestion}
-                  disabled={loading || !answerInput.trim()}
+                  disabled={loading || isSynthesizing || !answerInput.trim()}
                   className="w-full sm:w-auto px-5 py-2.5 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-white transition-colors cursor-pointer disabled:opacity-40 font-mono flex items-center justify-center gap-1.5 shadow-xs"
                 >
-                  {loading ? "Processing..." : "Next Question →"}
+                  {loading && !isSynthesizing ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Thinking...</span>
+                    </>
+                  ) : (
+                    "Next Question →"
+                  )}
                 </button>
               </div>
             </div>
